@@ -15,42 +15,54 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix=config.COMMAND_PREFIX, intents=intents)
 
-async def get_solana_price():
-    """Get current Solana price from CoinGecko API"""
+# Supported chains with their CoinGecko IDs and display symbols
+SUPPORTED_CHAINS = {
+    'SOL': {'id': 'solana', 'symbol': 'SOL', 'fallback_price': 100.0},
+    'BNB': {'id': 'binancecoin', 'symbol': 'BNB', 'fallback_price': 300.0},
+    'ETH': {'id': 'ethereum', 'symbol': 'ETH', 'fallback_price': 2000.0},
+}
+
+async def get_token_price(chain: str = 'SOL'):
+    """Get current token price from CoinGecko API"""
+    chain_info = SUPPORTED_CHAINS.get(chain.upper(), SUPPORTED_CHAINS['SOL'])
+    token_id = chain_info['id']
+    fallback_price = chain_info['fallback_price']
+
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd') as response:
+            async with session.get(f'https://api.coingecko.com/api/v3/simple/price?ids={token_id}&vs_currencies=usd') as response:
                 if response.status == 200:
                     data = await response.json()
-                    return data['solana']['usd']
+                    return data[token_id]['usd']
                 else:
                     # Fallback to synchronous request
-                    fallback_response = requests.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd')
+                    fallback_response = requests.get(f'https://api.coingecko.com/api/v3/simple/price?ids={token_id}&vs_currencies=usd')
                     if fallback_response.status_code == 200:
-                        return fallback_response.json()['solana']['usd']
+                        return fallback_response.json()[token_id]['usd']
                     else:
-                        return 100.0  # Fallback price
+                        return fallback_price
     except Exception as e:
-        print(f"Error fetching Solana price: {e}")
-        return 100.0  # Fallback price
+        print(f"Error fetching {chain} price: {e}")
+        return fallback_price
 
 class PNLCard:
-    def __init__(self, username: str, coin_name: str, bought_sol: float, sold_sol: float, sol_price: float, background_path: str = None):
+    def __init__(self, username: str, coin_name: str, bought_amount: float, sold_amount: float, token_price: float, chain: str = 'SOL', background_path: str = None):
         self.username = username
         self.coin_name = coin_name.upper()
-        self.bought_sol = bought_sol
-        self.sold_sol = sold_sol
-        self.sol_price = sol_price
+        self.chain = chain.upper()
+        self.bought_amount = bought_amount
+        self.sold_amount = sold_amount
+        self.token_price = token_price
         self.background_path = background_path or f"{config.BACKGROUNDS_FOLDER}/default.jpg"
-        
+
         # Calculate dollar values
-        self.bought_usd = bought_sol * sol_price
-        self.sold_usd = sold_sol * sol_price
-        
-        # Calculate profit/loss in both SOL and USD
-        self.pnl_sol = sold_sol - bought_sol
-        self.pnl_usd = self.pnl_sol * sol_price
-        self.is_profit = self.pnl_sol > 0
+        self.bought_usd = bought_amount * token_price
+        self.sold_usd = sold_amount * token_price
+
+        # Calculate profit/loss in both native token and USD
+        self.pnl_amount = sold_amount - bought_amount
+        self.pnl_usd = self.pnl_amount * token_price
+        self.is_profit = self.pnl_amount > 0
         
     def generate_card(self) -> io.BytesIO:
         """Generate the futuristic PNL card image"""
@@ -118,13 +130,13 @@ class PNLCard:
         draw.text((left_x, y_coin), f"> {self.coin_name}", fill=white, font=label_font)
         
         # Profit/Loss section (bright)
-        pnl_sol_abs = abs(self.pnl_sol)
-        if pnl_sol_abs >= 1000:
-            pnl_sol_formatted = f"{pnl_sol_abs/1000:.1f}K"
+        pnl_abs = abs(self.pnl_amount)
+        if pnl_abs >= 1000:
+            pnl_formatted = f"{pnl_abs/1000:.1f}K"
         else:
-            pnl_sol_formatted = f"{pnl_sol_abs:.1f}"
-        
-        profit_text = f"PROFIT: +{pnl_sol_formatted} SOL" if self.is_profit else f"LOSS: -{pnl_sol_formatted} SOL"
+            pnl_formatted = f"{pnl_abs:.1f}"
+
+        profit_text = f"PROFIT: +{pnl_formatted} {self.chain}" if self.is_profit else f"LOSS: -{pnl_formatted} {self.chain}"
         profit_color = cyan if self.is_profit else red
         draw.text((left_x, y_profit), profit_text, fill=profit_color, font=large_font)
         # Format profit USD value
@@ -133,13 +145,13 @@ class PNLCard:
         draw.text((left_x, y_profit_usd), f"> ${pnl_usd_formatted}", fill=cyan, font=small_font)
         
         # Bought section (pale)
-        draw.text((left_x, y_bought), f"BOUGHT: {self.bought_sol:.1f} SOL", fill=pale_gray, font=value_font)
+        draw.text((left_x, y_bought), f"BOUGHT: {self.bought_amount:.1f} {self.chain}", fill=pale_gray, font=value_font)
         # Format bought USD value
         bought_usd_formatted = f"{self.bought_usd/1000:.1f}K" if self.bought_usd >= 1000 else f"{self.bought_usd:.1f}"
         draw.text((left_x, y_bought_usd), f"> ${bought_usd_formatted}", fill=dolar, font=small_font)
-        
+
         # Sold section (pale)
-        draw.text((left_x, y_sold), f"SOLD: {self.sold_sol:.1f} SOL", fill=pale_gray, font=value_font)
+        draw.text((left_x, y_sold), f"SOLD: {self.sold_amount:.1f} {self.chain}", fill=pale_gray, font=value_font)
         # Format sold USD value
         sold_usd_formatted = f"{self.sold_usd/1000:.1f}K" if self.sold_usd >= 1000 else f"{self.sold_usd:.1f}"
         draw.text((left_x, y_sold_usd), f"> ${sold_usd_formatted}", fill=dolar, font=small_font)
@@ -216,20 +228,29 @@ async def on_ready():
 @bot.tree.command(name='pnl', description='Create a custom PNL trading card')
 @app_commands.describe(
     username='Your username/trader name',
-    coin_name='The coin symbol (e.g., SOL, BTC, ETH)',
-    bought_amount='How much of the coin you bought',
-    sold_amount='How much of the coin you sold'
+    coin_name='The coin/token you traded (e.g., BONK, PEPE, WIF)',
+    bought_amount='How much of the native token you spent',
+    sold_amount='How much of the native token you received',
+    chain='The blockchain/native token (default: SOL)'
 )
-async def slash_pnl(interaction: discord.Interaction, username: str, coin_name: str, bought_amount: float, sold_amount: float):
-    """Create a Solana PNL card with direct input"""
-    
+@app_commands.choices(chain=[
+    app_commands.Choice(name='Solana (SOL)', value='SOL'),
+    app_commands.Choice(name='BNB Chain (BNB)', value='BNB'),
+    app_commands.Choice(name='Ethereum (ETH)', value='ETH'),
+])
+async def slash_pnl(interaction: discord.Interaction, username: str, coin_name: str, bought_amount: float, sold_amount: float, chain: app_commands.Choice[str] = None):
+    """Create a PNL card with direct input"""
+
     try:
         # Acknowledge the interaction first (ephemeral = private)
         await interaction.response.defer(ephemeral=True)
-        
-        # Fetch current Solana price
-        sol_price = await get_solana_price()
-        
+
+        # Get chain value (default to SOL)
+        chain_value = chain.value if chain else 'SOL'
+
+        # Fetch current token price for the selected chain
+        token_price = await get_token_price(chain_value)
+
         # Create PNL card with custom background
         # Look for any image file in backgrounds folder
         background_path = None
@@ -238,13 +259,13 @@ async def slash_pnl(interaction: discord.Interaction, username: str, coin_name: 
                 if file.lower().endswith(('.png', '.jpg', '.jpeg')) and not file.startswith('.'):
                     background_path = f"{config.BACKGROUNDS_FOLDER}/{file}"
                     break
-        
-        pnl_card = PNLCard(username, coin_name, bought_amount, sold_amount, sol_price, background_path)
+
+        pnl_card = PNLCard(username, coin_name, bought_amount, sold_amount, token_price, chain_value, background_path)
         card_image = pnl_card.generate_card()
-        
+
         # Create Discord file
         discord_file = discord.File(card_image, filename=f"{username}_{coin_name.lower()}_pnl.png")
-        
+
         # Send the card with embed (ephemeral = private)
         embed = discord.Embed(
             title="🔒 Private Trading Report",
@@ -252,16 +273,16 @@ async def slash_pnl(interaction: discord.Interaction, username: str, coin_name: 
             color=0x00ff00 if pnl_card.is_profit else 0xff0000
         )
         embed.add_field(name="Trader", value=username, inline=True)
-        embed.add_field(name=f"{coin_name.upper()} Price", value=f"${sol_price:.2f}", inline=True)
+        embed.add_field(name=f"{chain_value} Price", value=f"${token_price:.2f}", inline=True)
         # Format P&L for Discord embed
-        pnl_sol_abs = abs(pnl_card.pnl_sol)
-        pnl_sol_formatted = f"{pnl_sol_abs/1000:.1f}K" if pnl_sol_abs >= 1000 else f"{pnl_sol_abs:.1f}"
+        pnl_abs = abs(pnl_card.pnl_amount)
+        pnl_formatted = f"{pnl_abs/1000:.1f}K" if pnl_abs >= 1000 else f"{pnl_abs:.1f}"
         pnl_usd_abs = abs(pnl_card.pnl_usd)
         pnl_usd_formatted = f"{pnl_usd_abs/1000:.1f}K" if pnl_usd_abs >= 1000 else f"{pnl_usd_abs:.2f}"
-        embed.add_field(name="P&L", value=f"{'+' if pnl_card.is_profit else '-'}{pnl_sol_formatted} {coin_name.upper()} (${pnl_usd_formatted})", inline=False)
-        
+        embed.add_field(name="P&L", value=f"{'+' if pnl_card.is_profit else '-'}{pnl_formatted} {chain_value} (${pnl_usd_formatted})", inline=False)
+
         await interaction.followup.send(embed=embed, file=discord_file, ephemeral=True)
-        
+
     except ValueError:
         await interaction.followup.send("❌ Invalid input! Please use numbers for coin amounts.", ephemeral=True)
     except Exception as e:
@@ -278,13 +299,13 @@ async def slash_info(interaction: discord.Interaction):
     
     embed.add_field(
         name="/pnl",
-        value="Create a **private** custom PNL card with direct input\nParameters:\n• username: Your trader name\n• coin_name: Coin symbol (SOL, BTC, etc.)\n• bought_amount: Amount you bought\n• sold_amount: Amount you sold",
+        value="Create a **private** custom PNL card with direct input\nParameters:\n• username: Your trader name\n• coin_name: Token you traded (BONK, PEPE, etc.)\n• bought_amount: Native tokens spent\n• sold_amount: Native tokens received\n• chain: SOL, BNB, or ETH (default: SOL)",
         inline=False
     )
     
     embed.add_field(
         name="Features",
-        value="✅ **Private PNL cards** (only you can see them)\n✅ Custom coin name display\n✅ Real-time Solana price via API\n✅ Automatic USD conversion\n✅ Cyberpunk futuristic design\n✅ Custom background support",
+        value="✅ **Private PNL cards** (only you can see them)\n✅ Multi-chain support (SOL, BNB, ETH)\n✅ Real-time price via CoinGecko API\n✅ Automatic USD conversion\n✅ Custom backgrounds and themes",
         inline=False
     )
     
