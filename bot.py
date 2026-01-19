@@ -2,8 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import os
-import asyncio
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import io
 from typing import Optional
 import config
@@ -22,6 +21,42 @@ SUPPORTED_CHAINS = {
     'ETH': {'id': 'ethereum', 'symbol': 'ETH', 'fallback_price': 2000.0},
 }
 
+# Theme configurations
+THEMES = {
+    'cyberpunk': {
+        'background': 'backgrounds/background.jpg',
+        'fonts': {
+            'title': ('fonts/ShareTechMono-Regular.ttf', 24),
+            'large': ('fonts/ShareTechMono-Regular.ttf', 24),
+            'medium': ('fonts/ShareTechMono-Regular.ttf', 24),
+            'small': ('fonts/ShareTechMono-Regular.ttf', 24),
+        },
+        'colors': {
+            'profit': (0, 255, 255),
+            'loss': (255, 50, 50),
+            'text': (255, 255, 255),
+            'muted': (120, 120, 120),
+            'accent': (0, 255, 255),
+        }
+    },
+    'jjk': {
+        'background': 'backgrounds/jjk.webp',
+        'fonts': {
+            'title': ('fonts/PressStart2P.ttf', 32),
+            'large': ('fonts/VT323-Regular.ttf', 85),
+            'medium': ('fonts/VT323-Regular.ttf', 42),
+            'small': ('fonts/VT323-Regular.ttf', 34),
+        },
+        'colors': {
+            'profit': (255, 220, 50),
+            'loss': (255, 50, 50),
+            'text': (255, 255, 255),
+            'muted': (150, 150, 150),
+            'accent': (255, 120, 0),
+        }
+    }
+}
+
 async def get_token_price(chain: str = 'SOL'):
     """Get current token price from CoinGecko API"""
     chain_info = SUPPORTED_CHAINS.get(chain.upper(), SUPPORTED_CHAINS['SOL'])
@@ -35,7 +70,6 @@ async def get_token_price(chain: str = 'SOL'):
                     data = await response.json()
                     return data[token_id]['usd']
                 else:
-                    # Fallback to synchronous request
                     fallback_response = requests.get(f'https://api.coingecko.com/api/v3/simple/price?ids={token_id}&vs_currencies=usd')
                     if fallback_response.status_code == 200:
                         return fallback_response.json()[token_id]['usd']
@@ -45,185 +79,244 @@ async def get_token_price(chain: str = 'SOL'):
         print(f"Error fetching {chain} price: {e}")
         return fallback_price
 
+
 class PNLCard:
-    def __init__(self, username: str, coin_name: str, bought_amount: float, sold_amount: float, token_price: float, chain: str = 'SOL', background_path: str = None):
+    def __init__(self, username: str, coin_name: str, bought_amount: float, sold_amount: float,
+                 token_price: float, chain: str = 'SOL', theme: str = 'cyberpunk'):
         self.username = username
         self.coin_name = coin_name.upper()
         self.chain = chain.upper()
         self.bought_amount = bought_amount
         self.sold_amount = sold_amount
         self.token_price = token_price
-        self.background_path = background_path or f"{config.BACKGROUNDS_FOLDER}/default.jpg"
+        self.theme = theme.lower() if theme.lower() in THEMES else 'cyberpunk'
+        self.theme_config = THEMES[self.theme]
 
-        # Calculate dollar values
+        # Calculate values
         self.bought_usd = bought_amount * token_price
         self.sold_usd = sold_amount * token_price
-
-        # Calculate profit/loss in both native token and USD
         self.pnl_amount = sold_amount - bought_amount
         self.pnl_usd = self.pnl_amount * token_price
         self.is_profit = self.pnl_amount > 0
-        
+        self.multiplier = sold_amount / bought_amount if bought_amount > 0 else 0
+
     def generate_card(self) -> io.BytesIO:
-        """Generate the futuristic PNL card image"""
-        # Create base image
+        """Generate the PNL card based on theme"""
+        if self.theme == 'jjk':
+            return self._generate_jjk_card()
+        else:
+            return self._generate_cyberpunk_card()
+
+    def _generate_cyberpunk_card(self) -> io.BytesIO:
+        """Generate cyberpunk themed card"""
         width, height = config.DEFAULT_CARD_WIDTH, config.DEFAULT_CARD_HEIGHT
-        
-        # Try to load custom background image, otherwise create default
+
+        # Load background
+        bg_path = self.theme_config['background']
         try:
-            if os.path.exists(self.background_path):
-                bg_img = Image.open(self.background_path)
+            if os.path.exists(bg_path):
+                bg_img = Image.open(bg_path)
                 bg_img = bg_img.resize((width, height), Image.Resampling.LANCZOS)
             else:
-                # Create default cyberpunk background
-                bg_img = self.create_cyberpunk_background(width, height)
+                bg_img = self._create_cyberpunk_background(width, height)
         except:
-            bg_img = self.create_cyberpunk_background(width, height)
-        
+            bg_img = self._create_cyberpunk_background(width, height)
+
         draw = ImageDraw.Draw(bg_img)
-        
-        # Load fonts with fallbacks
+
+        # Load fonts
+        fonts = self.theme_config['fonts']
+        colors = self.theme_config['colors']
+
         try:
-            primary_font = config.FONTS['primary_font']
-            header_font = ImageFont.truetype(primary_font, config.FONTS['sizes']['header'])
-            label_font = ImageFont.truetype(primary_font, config.FONTS['sizes']['label'])
-            value_font = ImageFont.truetype(primary_font, config.FONTS['sizes']['value'])
-            small_font = ImageFont.truetype(primary_font, config.FONTS['sizes']['small'])
-            large_font = ImageFont.truetype(primary_font, config.FONTS['sizes']['large'])
+            label_font = ImageFont.truetype(fonts['medium'][0], fonts['medium'][1])
+            value_font = ImageFont.truetype(fonts['medium'][0], fonts['medium'][1])
+            small_font = ImageFont.truetype(fonts['small'][0], fonts['small'][1])
+            large_font = ImageFont.truetype(fonts['large'][0], fonts['large'][1])
         except:
-            # Fallback to default fonts if custom font fails
-            header_font = ImageFont.load_default()
-            label_font = ImageFont.load_default()
-            value_font = ImageFont.load_default()
-            small_font = ImageFont.load_default()
-            large_font = ImageFont.load_default()
-        
-        # Colors - bright for first 2 sections, pale for rest
-        cyan = (0, 255, 255)          # Bright cyan for coin name and profit
-        white = (255, 255, 255)       # Bright white for coin name and profit
-        pale_gray = (120, 120, 120)   # Pale gray for other sections  
-        gray = (150, 150, 150)        # Regular gray for USD values
-        green = (0, 255, 100)         # Bright green for profit
-        red = (255, 50, 50)
-        ocean_blue = (30, 60, 120) 
-        dolar = (44,44,44)
-        
+            label_font = value_font = small_font = large_font = ImageFont.load_default()
+
         # Draw corner brackets
-        self.draw_corner_brackets(draw, width, height, cyan)
-        
-        
-        # Left side info
+        self._draw_corner_brackets(draw, width, height, colors['accent'])
+
+        # Positions
         left_x = 100
-        
-        # Y positions for easy adjustment
-        y_coin = 130
-        y_profit = 192
-        y_profit_usd = 225
-        y_bought = 287
-        y_bought_usd = 320
-        y_sold = 382
-        y_sold_usd = 415
-        y_user = 472
-        y_bottom = 505
-        
-        # Coin name (replacing "> NO")
-        draw.text((left_x, y_coin), f"> {self.coin_name}", fill=white, font=label_font)
-        
-        # Profit/Loss section (bright)
-        pnl_abs = abs(self.pnl_amount)
-        if pnl_abs >= 1000:
-            pnl_formatted = f"{pnl_abs/1000:.1f}K"
-        else:
-            pnl_formatted = f"{pnl_abs:.1f}"
+        y_coin, y_profit, y_profit_usd = 130, 192, 225
+        y_bought, y_bought_usd = 287, 320
+        y_sold, y_sold_usd = 382, 415
+        y_user, y_bottom = 472, 505
 
+        # Coin name
+        draw.text((left_x, y_coin), f"> {self.coin_name}", fill=colors['text'], font=label_font)
+
+        # Profit/Loss
+        pnl_formatted = f"{abs(self.pnl_amount)/1000:.1f}K" if abs(self.pnl_amount) >= 1000 else f"{abs(self.pnl_amount):.1f}"
         profit_text = f"PROFIT: +{pnl_formatted} {self.chain}" if self.is_profit else f"LOSS: -{pnl_formatted} {self.chain}"
-        profit_color = cyan if self.is_profit else red
+        profit_color = colors['profit'] if self.is_profit else colors['loss']
         draw.text((left_x, y_profit), profit_text, fill=profit_color, font=large_font)
-        # Format profit USD value
-        pnl_usd_abs = abs(self.pnl_usd)
-        pnl_usd_formatted = f"{pnl_usd_abs/1000:.1f}K" if pnl_usd_abs >= 1000 else f"{pnl_usd_abs:.1f}"
-        draw.text((left_x, y_profit_usd), f"> ${pnl_usd_formatted}", fill=cyan, font=small_font)
-        
-        # Bought section (pale)
-        draw.text((left_x, y_bought), f"BOUGHT: {self.bought_amount:.1f} {self.chain}", fill=pale_gray, font=value_font)
-        # Format bought USD value
-        bought_usd_formatted = f"{self.bought_usd/1000:.1f}K" if self.bought_usd >= 1000 else f"{self.bought_usd:.1f}"
-        draw.text((left_x, y_bought_usd), f"> ${bought_usd_formatted}", fill=dolar, font=small_font)
 
-        # Sold section (pale)
-        draw.text((left_x, y_sold), f"SOLD: {self.sold_amount:.1f} {self.chain}", fill=pale_gray, font=value_font)
-        # Format sold USD value
+        pnl_usd_formatted = f"{abs(self.pnl_usd)/1000:.1f}K" if abs(self.pnl_usd) >= 1000 else f"{abs(self.pnl_usd):.1f}"
+        draw.text((left_x, y_profit_usd), f"> ${pnl_usd_formatted}", fill=colors['accent'], font=small_font)
+
+        # Bought
+        draw.text((left_x, y_bought), f"BOUGHT: {self.bought_amount:.1f} {self.chain}", fill=colors['muted'], font=value_font)
+        bought_usd_formatted = f"{self.bought_usd/1000:.1f}K" if self.bought_usd >= 1000 else f"{self.bought_usd:.1f}"
+        draw.text((left_x, y_bought_usd), f"> ${bought_usd_formatted}", fill=(44,44,44), font=small_font)
+
+        # Sold
+        draw.text((left_x, y_sold), f"SOLD: {self.sold_amount:.1f} {self.chain}", fill=colors['muted'], font=value_font)
         sold_usd_formatted = f"{self.sold_usd/1000:.1f}K" if self.sold_usd >= 1000 else f"{self.sold_usd:.1f}"
-        draw.text((left_x, y_sold_usd), f"> ${sold_usd_formatted}", fill=dolar, font=small_font)
-        
-        
-        # User section (pale)
-        draw.text((left_x, y_user), f"USER: {self.username.upper()}", fill=pale_gray, font=value_font)
-        draw.text((left_x, y_bottom), "> SRCL", fill=dolar, font=small_font)
-        
-        # Bottom text
-        
-        # Convert to bytes
+        draw.text((left_x, y_sold_usd), f"> ${sold_usd_formatted}", fill=(44,44,44), font=small_font)
+
+        # User
+        draw.text((left_x, y_user), f"USER: {self.username.upper()}", fill=colors['muted'], font=value_font)
+        draw.text((left_x, y_bottom), f"> {self.chain}", fill=(44,44,44), font=small_font)
+
         output = io.BytesIO()
         bg_img.save(output, format='PNG')
         output.seek(0)
-        
         return output
-    
-    def create_cyberpunk_background(self, width: int, height: int) -> Image.Image:
+
+    def _generate_jjk_card(self) -> io.BytesIO:
+        """Generate JJK/fire themed card with retro terminal style"""
+        width, height = config.DEFAULT_CARD_WIDTH, config.DEFAULT_CARD_HEIGHT
+
+        # Load background
+        bg_path = self.theme_config['background']
+        try:
+            if os.path.exists(bg_path):
+                bg_img = Image.open(bg_path).convert("RGBA")
+                bg_img = bg_img.resize((width, height), Image.Resampling.LANCZOS)
+            else:
+                bg_img = Image.new('RGBA', (width, height), (30, 20, 10, 255))
+        except:
+            bg_img = Image.new('RGBA', (width, height), (30, 20, 10, 255))
+
+        overlay = Image.new('RGBA', bg_img.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+
+        # Load fonts
+        fonts = self.theme_config['fonts']
+        colors = self.theme_config['colors']
+
+        try:
+            font_title = ImageFont.truetype(fonts['title'][0], fonts['title'][1])
+            font_big = ImageFont.truetype(fonts['large'][0], fonts['large'][1])
+            font_med = ImageFont.truetype(fonts['medium'][0], fonts['medium'][1])
+            font_small = ImageFont.truetype(fonts['small'][0], fonts['small'][1])
+        except:
+            font_title = font_big = font_med = font_small = ImageFont.load_default()
+
+        # Dark panel
+        draw.rectangle([0, 0, 300, height], fill=(0, 0, 0, 240))
+        for i in range(300, 420):
+            alpha = int(240 * (1 - (i - 300) / 120))
+            draw.line([(i, 0), (i, height)], fill=(0, 0, 0, alpha))
+
+        # Coin name with glow
+        coin_text = f"${self.coin_name}"
+        glow_layer = Image.new('RGBA', bg_img.size, (0, 0, 0, 0))
+        glow_draw = ImageDraw.Draw(glow_layer)
+        for offset in range(8, 0, -2):
+            glow_draw.text((45-offset, 35-offset), coin_text, font=font_title, fill=(255, 150, 0, 40))
+            glow_draw.text((45+offset, 35+offset), coin_text, font=font_title, fill=(255, 150, 0, 40))
+        glow_layer = glow_layer.filter(ImageFilter.GaussianBlur(4))
+        overlay = Image.alpha_composite(overlay, glow_layer)
+        draw = ImageDraw.Draw(overlay)
+        draw.text((45, 35), coin_text, font=font_title, fill=colors['text'])
+
+        # Multiplier with glow
+        mult_text = f"{self.multiplier:.1f}X"
+        mult_color = colors['profit'] if self.is_profit else colors['loss']
+        glow2 = Image.new('RGBA', bg_img.size, (0, 0, 0, 0))
+        glow2_draw = ImageDraw.Draw(glow2)
+        glow2_draw.text((45, 85), mult_text, font=font_big, fill=(*mult_color[:3], 60))
+        glow2 = glow2.filter(ImageFilter.GaussianBlur(10))
+        overlay = Image.alpha_composite(overlay, glow2)
+        draw = ImageDraw.Draw(overlay)
+        draw.text((45, 90), mult_text, font=font_big, fill=mult_color)
+
+        # Profit USD
+        profit_sign = "+" if self.is_profit else "-"
+        usd_formatted = f"{profit_sign}${abs(self.pnl_usd)/1000:.1f}K" if abs(self.pnl_usd) >= 1000 else f"{profit_sign}${abs(self.pnl_usd):,.0f}"
+        draw.text((45, 180), usd_formatted, font=font_med, fill=colors['accent'])
+
+        # Stats
+        draw.text((35, 255), "> INVESTED", font=font_small, fill=colors['muted'])
+        draw.text((220, 255), f"{self.bought_amount:.1f} {self.chain}", font=font_small, fill=colors['text'])
+
+        draw.text((35, 310), "> RETURNED", font=font_small, fill=colors['muted'])
+        draw.text((220, 310), f"{self.sold_amount:.1f} {self.chain}", font=font_small, fill=colors['text'])
+
+        draw.text((35, 365), "> PROFIT", font=font_small, fill=colors['muted'])
+        pnl_formatted = f"{profit_sign}{abs(self.pnl_amount)/1000:.1f}K" if abs(self.pnl_amount) >= 1000 else f"{profit_sign}{abs(self.pnl_amount):.1f}"
+        draw.text((220, 365), f"{pnl_formatted} {self.chain}", font=font_small, fill=mult_color)
+
+        # Username with cursor
+        draw.text((35, 450), f"@{self.username.upper()}", font=font_med, fill=colors['accent'])
+        cursor_x = 35 + len(f"@{self.username.upper()}") * 21
+        draw.rectangle([cursor_x, 455, cursor_x + 18, 490], fill=colors['accent'])
+
+        # Decorative corners
+        acc = colors['accent'] + (200,)
+        draw.line([(18, 18), (75, 18)], fill=acc, width=3)
+        draw.line([(18, 18), (18, 75)], fill=acc, width=3)
+        draw.line([(18, 650), (75, 650)], fill=acc, width=3)
+        draw.line([(18, 593), (18, 650)], fill=acc, width=3)
+
+        # Scanlines
+        for y in range(0, height, 4):
+            draw.line([(0, y), (width, y)], fill=(0, 0, 0, 20))
+
+        result = Image.alpha_composite(bg_img, overlay)
+        output = io.BytesIO()
+        result.convert('RGB').save(output, format='PNG')
+        output.seek(0)
+        return output
+
+    def _create_cyberpunk_background(self, width: int, height: int) -> Image.Image:
         """Create a cyberpunk-themed background"""
-        # Create dark background with gradient effect
-        img = Image.new('RGB', (width, height), color=(15, 25, 35))  # Dark blue-gray
+        img = Image.new('RGB', (width, height), color=(15, 25, 35))
         draw = ImageDraw.Draw(img)
-        
-        # Add subtle grid pattern
+
         grid_color = (25, 35, 45)
         for x in range(0, width, 40):
             draw.line([(x, 0), (x, height)], fill=grid_color, width=1)
         for y in range(0, height, 40):
             draw.line([(0, y), (width, y)], fill=grid_color, width=1)
-        
-        # Add cyan accents
+
         accent_color = (0, 100, 120)
         draw.rectangle([10, 10, width-10, height-10], outline=accent_color, width=2)
-        
+
         return img
-    
-    def draw_corner_brackets(self, draw, width: int, height: int, color):
-        """Draw cyberpunk corner brackets"""
-        bracket_size = 30
-        bracket_width = 3
-        
-        # Top-left bracket
+
+    def _draw_corner_brackets(self, draw, width: int, height: int, color):
+        """Draw corner brackets"""
+        bracket_size, bracket_width = 30, 3
+
         draw.line([(20, 20), (20 + bracket_size, 20)], fill=color, width=bracket_width)
         draw.line([(20, 20), (20, 20 + bracket_size)], fill=color, width=bracket_width)
-        
-        # Top-right bracket  
         draw.line([(width - 20, 20), (width - 20 - bracket_size, 20)], fill=color, width=bracket_width)
         draw.line([(width - 20, 20), (width - 20, 20 + bracket_size)], fill=color, width=bracket_width)
-        
-        # Bottom-left bracket
         draw.line([(20, height - 20), (20 + bracket_size, height - 20)], fill=color, width=bracket_width)
         draw.line([(20, height - 20), (20, height - 20 - bracket_size)], fill=color, width=bracket_width)
-        
-        # Bottom-right bracket
         draw.line([(width - 20, height - 20), (width - 20 - bracket_size, height - 20)], fill=color, width=bracket_width)
         draw.line([(width - 20, height - 20), (width - 20, height - 20 - bracket_size)], fill=color, width=bracket_width)
+
 
 @bot.event
 async def on_ready():
     print(f'{bot.user} has landed on the trading seas!')
-    
-    # Create backgrounds directory if it doesn't exist
+
     if not os.path.exists(config.BACKGROUNDS_FOLDER):
         os.makedirs(config.BACKGROUNDS_FOLDER)
-    
-    # Sync slash commands
+
     try:
         synced = await bot.tree.sync()
         print(f'⚡ Synced {len(synced)} slash command(s)')
     except Exception as e:
         print(f'❌ Failed to sync slash commands: {e}')
+
 
 @bot.tree.command(name='pnl', description='Create a custom PNL trading card')
 @app_commands.describe(
@@ -231,42 +324,39 @@ async def on_ready():
     coin_name='The coin/token you traded (e.g., BONK, PEPE, WIF)',
     bought_amount='How much of the native token you spent',
     sold_amount='How much of the native token you received',
-    chain='The blockchain/native token (default: SOL)'
+    chain='The blockchain/native token (default: SOL)',
+    theme='Card theme style (default: cyberpunk)'
 )
-@app_commands.choices(chain=[
-    app_commands.Choice(name='Solana (SOL)', value='SOL'),
-    app_commands.Choice(name='BNB Chain (BNB)', value='BNB'),
-    app_commands.Choice(name='Ethereum (ETH)', value='ETH'),
-])
-async def slash_pnl(interaction: discord.Interaction, username: str, coin_name: str, bought_amount: float, sold_amount: float, chain: app_commands.Choice[str] = None):
+@app_commands.choices(
+    chain=[
+        app_commands.Choice(name='Solana (SOL)', value='SOL'),
+        app_commands.Choice(name='BNB Chain (BNB)', value='BNB'),
+        app_commands.Choice(name='Ethereum (ETH)', value='ETH'),
+    ],
+    theme=[
+        app_commands.Choice(name='Cyberpunk (Teal)', value='cyberpunk'),
+        app_commands.Choice(name='JJK (Fire)', value='jjk'),
+    ]
+)
+async def slash_pnl(interaction: discord.Interaction, username: str, coin_name: str,
+                    bought_amount: float, sold_amount: float,
+                    chain: app_commands.Choice[str] = None,
+                    theme: app_commands.Choice[str] = None):
     """Create a PNL card with direct input"""
-
     try:
-        # Acknowledge the interaction first (ephemeral = private)
         await interaction.response.defer(ephemeral=True)
 
-        # Get chain value (default to SOL)
         chain_value = chain.value if chain else 'SOL'
+        theme_value = theme.value if theme else 'cyberpunk'
 
-        # Fetch current token price for the selected chain
         token_price = await get_token_price(chain_value)
 
-        # Create PNL card with custom background
-        # Look for any image file in backgrounds folder
-        background_path = None
-        if os.path.exists(config.BACKGROUNDS_FOLDER):
-            for file in os.listdir(config.BACKGROUNDS_FOLDER):
-                if file.lower().endswith(('.png', '.jpg', '.jpeg')) and not file.startswith('.'):
-                    background_path = f"{config.BACKGROUNDS_FOLDER}/{file}"
-                    break
-
-        pnl_card = PNLCard(username, coin_name, bought_amount, sold_amount, token_price, chain_value, background_path)
+        pnl_card = PNLCard(username, coin_name, bought_amount, sold_amount,
+                          token_price, chain_value, theme_value)
         card_image = pnl_card.generate_card()
 
-        # Create Discord file
         discord_file = discord.File(card_image, filename=f"{username}_{coin_name.lower()}_pnl.png")
 
-        # Send the card with embed (ephemeral = private)
         embed = discord.Embed(
             title="🔒 Private Trading Report",
             description="This PNL card is only visible to you!",
@@ -274,7 +364,8 @@ async def slash_pnl(interaction: discord.Interaction, username: str, coin_name: 
         )
         embed.add_field(name="Trader", value=username, inline=True)
         embed.add_field(name=f"{chain_value} Price", value=f"${token_price:.2f}", inline=True)
-        # Format P&L for Discord embed
+        embed.add_field(name="Multiplier", value=f"{pnl_card.multiplier:.1f}X", inline=True)
+
         pnl_abs = abs(pnl_card.pnl_amount)
         pnl_formatted = f"{pnl_abs/1000:.1f}K" if pnl_abs >= 1000 else f"{pnl_abs:.1f}"
         pnl_usd_abs = abs(pnl_card.pnl_usd)
@@ -288,70 +379,62 @@ async def slash_pnl(interaction: discord.Interaction, username: str, coin_name: 
     except Exception as e:
         await interaction.followup.send(f"❌ Error creating PNL card: {str(e)}", ephemeral=True)
 
+
 @bot.tree.command(name='info', description='Show information about the PNL Card Bot')
 async def slash_info(interaction: discord.Interaction):
     """Show help for custom PNL commands"""
     embed = discord.Embed(
         title="🚀 Custom PNL Card Bot",
-        description="Create custom trading reports with futuristic cyberpunk design!",
+        description="Create custom trading reports with multiple themes!",
         color=0x00FFFF
     )
-    
+
     embed.add_field(
         name="/pnl",
-        value="Create a **private** custom PNL card with direct input\nParameters:\n• username: Your trader name\n• coin_name: Token you traded (BONK, PEPE, etc.)\n• bought_amount: Native tokens spent\n• sold_amount: Native tokens received\n• chain: SOL, BNB, or ETH (default: SOL)",
+        value="Create a **private** custom PNL card\nParameters:\n• username: Your trader name\n• coin_name: Token traded (BONK, PEPE, etc.)\n• bought_amount: Native tokens spent\n• sold_amount: Native tokens received\n• chain: SOL, BNB, or ETH\n• theme: cyberpunk or jjk",
         inline=False
     )
-    
+
+    embed.add_field(
+        name="Themes",
+        value="🌐 **Cyberpunk** - Teal/cyan futuristic style\n🔥 **JJK** - Fire/orange retro terminal style",
+        inline=False
+    )
+
     embed.add_field(
         name="Features",
-        value="✅ **Private PNL cards** (only you can see them)\n✅ Multi-chain support (SOL, BNB, ETH)\n✅ Real-time price via CoinGecko API\n✅ Automatic USD conversion\n✅ Custom backgrounds and themes",
+        value="✅ Private PNL cards (only you see them)\n✅ Multi-chain support (SOL, BNB, ETH)\n✅ Real-time price via CoinGecko\n✅ Auto multiplier calculation\n✅ Multiple themes",
         inline=False
     )
-    
-    embed.add_field(
-        name="Example Usage",
-        value="Use `/pnl username:CryptoTrader coin_name:SOL bought_amount:100 sold_amount:75`\nBot will fetch current SOL price and generate your **private** custom card!",
-        inline=False
-    )
-    
+
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# Legacy commands for transition help
+
 @bot.command(name='pnl')
 async def legacy_pnl(ctx):
     """Legacy command - redirect to slash command"""
     embed = discord.Embed(
         title="🔄 Command Updated!",
-        description="This bot now uses **Slash Commands**!\n\nInstead of `!pnl`, please use `/pnl`",
+        description="This bot now uses **Slash Commands**!\n\nUse `/pnl` instead of `!pnl`",
         color=0xFFDD00
     )
-    embed.add_field(
-        name="New Usage",
-        value="Type `/pnl` and fill in the parameters:\n• username\n• coin_name\n• bought_amount\n• sold_amount",
-        inline=False
-    )
-    embed.add_field(
-        name="Example",
-        value="`/pnl username:CryptoTrader coin_name:SOL bought_amount:100 sold_amount:75`",
-        inline=False
-    )
     await ctx.send(embed=embed)
+
 
 @bot.command(name='info')
 async def legacy_info(ctx):
     """Legacy command - redirect to slash command"""
     embed = discord.Embed(
         title="🔄 Command Updated!",
-        description="This bot now uses **Slash Commands**!\n\nInstead of `!info`, please use `/info`",
+        description="Use `/info` instead of `!info`",
         color=0xFFDD00
     )
     await ctx.send(embed=embed)
 
-# Run the bot
+
 if __name__ == "__main__":
     if not config.DISCORD_TOKEN:
         print("❌ Please set DISCORD_TOKEN in your .env file")
         print("💡 Create a .env file with: DISCORD_TOKEN=your_bot_token_here")
     else:
-        bot.run(config.DISCORD_TOKEN) 
+        bot.run(config.DISCORD_TOKEN)
