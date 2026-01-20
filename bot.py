@@ -7,7 +7,9 @@ import io
 from typing import Optional
 import config
 import aiohttp
+from aiohttp import web
 import requests
+import asyncio
 
 # Bot setup
 intents = discord.Intents.default()
@@ -53,6 +55,22 @@ THEMES = {
             'text': (255, 255, 255),
             'muted': (150, 150, 150),
             'accent': (255, 120, 0),
+        }
+    },
+    'toji': {
+        'background': 'backgrounds/toji.jpg',
+        'fonts': {
+            'title': ('fonts/PressStart2P.ttf', 32),
+            'large': ('fonts/VT323-Regular.ttf', 85),
+            'medium': ('fonts/VT323-Regular.ttf', 42),
+            'small': ('fonts/VT323-Regular.ttf', 34),
+        },
+        'colors': {
+            'profit': (255, 190, 60),      # Amber gold (matches lights)
+            'loss': (180, 50, 50),          # Dark red
+            'text': (255, 240, 220),        # Warm cream white
+            'muted': (160, 140, 110),       # Muted brown/tan
+            'accent': (255, 170, 50),       # Golden amber
         }
     }
 }
@@ -102,7 +120,7 @@ class PNLCard:
 
     def generate_card(self) -> io.BytesIO:
         """Generate the PNL card based on theme"""
-        if self.theme == 'jjk':
+        if self.theme in ['jjk', 'toji']:
             return self._generate_jjk_card()
         else:
             return self._generate_cyberpunk_card()
@@ -336,6 +354,7 @@ async def on_ready():
     theme=[
         app_commands.Choice(name='Cyberpunk (Teal)', value='cyberpunk'),
         app_commands.Choice(name='JJK (Fire)', value='jjk'),
+        app_commands.Choice(name='Toji (Amber)', value='toji'),
     ]
 )
 async def slash_pnl(interaction: discord.Interaction, username: str, coin_name: str,
@@ -391,13 +410,13 @@ async def slash_info(interaction: discord.Interaction):
 
     embed.add_field(
         name="/pnl",
-        value="Create a **private** custom PNL card\nParameters:\n• username: Your trader name\n• coin_name: Token traded (BONK, PEPE, etc.)\n• bought_amount: Native tokens spent\n• sold_amount: Native tokens received\n• chain: SOL, BNB, or ETH\n• theme: cyberpunk or jjk",
+        value="Create a **private** custom PNL card\nParameters:\n• username: Your trader name\n• coin_name: Token traded (BONK, PEPE, etc.)\n• bought_amount: Native tokens spent\n• sold_amount: Native tokens received\n• chain: SOL, BNB, or ETH\n• theme: cyberpunk, jjk, or toji",
         inline=False
     )
 
     embed.add_field(
         name="Themes",
-        value="🌐 **Cyberpunk** - Teal/cyan futuristic style\n🔥 **JJK** - Fire/orange retro terminal style",
+        value="🌐 **Cyberpunk** - Teal/cyan futuristic style\n🔥 **JJK** - Fire/orange retro terminal style\n✨ **Toji** - Amber/gold tunnel style",
         inline=False
     )
 
@@ -431,6 +450,23 @@ async def legacy_info(ctx):
     )
     await ctx.send(embed=embed)
 
+
+# Keep-alive web server for Replit
+async def handle_ping(request):
+    return web.Response(text="Bot is alive!")
+
+async def run_webserver():
+    app = web.Application()
+    app.router.add_get('/', handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    await site.start()
+    print("🌐 Keep-alive server running on port 8080")
+
+@bot.event
+async def on_connect():
+    bot.loop.create_task(run_webserver())
 
 if __name__ == "__main__":
     if not config.DISCORD_TOKEN:
